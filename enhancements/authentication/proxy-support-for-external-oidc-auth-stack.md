@@ -1,17 +1,17 @@
 ---
-title: neat-enhancement-idea
+title: proxy-support-for-external-oidc-auth-stack
 authors:
   - "@tchap"
   - "@wouldgo"
 reviewers:
   - "@liouk" # The author of the original External OIDC EP, to review the whole EP.
-approvers: 
+approvers:
   - "@benluddy"
 api-approvers:
   - "None"
 creation-date: 2026-09-10
-last-updated: yyyy-mm-dd
-status: provisional|implementable|implemented|deferred|rejected|withdrawn|replaced|informational
+last-updated: 2026-09-10
+status: provisional
 tracking-link:
   - "https://redhat.atlassian.net/browse/OCPSTRAT-3721"
 see-also:
@@ -22,293 +22,238 @@ replaces:
 superseded-by:
 ---
 
-About the enhancement process:
-1. **Iterate.** Some sections of the enhancement do not make sense to fill out in the first pass.
-   We expect enhancements to be merged with enough detail to implement tech preview, and be updated later
-   ahead of promoting to GA.
-1. **Build consensus.** The enhancement process is a way to build consensus between multiple stakeholders
-   and align on the design before implementation begins. It is the responsibility of the author to drive
-   the process. This means that you must find stakeholders, request their review, and work with them to
-   address their concerns and get their approval. If you need help finding stakeholders, try asking in
-   #forum-ocp-arch or taking your proposal to the OCP arch call or a staff engineer.
-1. **Document decisions.** The enhancements act as our record of previous conversations and the decisions
-   that were made. It is important that these EPs are merged so that we can build a library of references
-   for future engineers/technical writers/support engineers to be able to understand the history of our
-   designs and the rationale behind them.
-   **Please find the time to make sure that these PRs are merged.** If you are struggling to reach consensus,
-   or you are not getting the reviews you need, please reach out to a staff engineer or your team lead to help you.
-
-To get started with this template:
-1. **Pick a domain.** Find the appropriate domain to discuss your enhancement.
-1. **Make a copy of this template.** Copy this template into the directory for
-   the domain.
-1. **Fill out the metadata at the top.** The embedded YAML document is
-   checked by the linter.
-1. **Fill out the "overview" sections.** This includes the Summary and
-   Motivation sections. These should be easy and explain why the community
-   should desire this enhancement.
-1. **Create a PR.** Assign it to folks with expertise in that domain to help
-   sponsor the process.
-1. **Merge after reaching consensus.** Merge when there is consensus
-   that the design is complete enough for implementation to begin.
-   It is ok to have some details missing, these should be captured in the open questions.
-   Come back and update the document if important details (API field names, workflow, etc.)
-   change during implementation.
-1. **Keep all required headers.** If a section does not apply to an
-   enhancement, explain why but do not remove the section. This part
-   of the process is enforced by the linter CI job.
-
-See ../README.md for background behind these instructions.
-
-Start by filling out the header with the metadata for this enhancement.
-
-# Neat Enhancement Idea
-
-This is the title of the enhancement. Keep it simple and descriptive. A good
-title can help communicate what the enhancement is and should be considered as
-part of any review.
-
-The YAML `title` should be lowercased and spaces/punctuation should be
-replaced with `-`.
-
-The `Metadata` section above is intended to support the creation of tooling
-around the enhancement process.
+# Proxy Support for External OIDC Auth Stack
 
 ## Summary
 
-The `Summary` section is important for producing high quality
-user-focused documentation such as release notes or a development roadmap. It
-should be possible to collect this information before implementation begins in
-order to avoid requiring implementors to split their attention between writing
-release notes and implementing the feature itself.
+This enhancement extends proxy support to External OIDC authentication mode, which uses oauth-apiserver as a webhook authenticator for kube-apiserver. It reuses the `Authentication.spec.proxy` API field introduced in the integrated auth proxy enhancement, enabling oauth-apiserver to reach external OIDC providers through a component-scoped proxy.
 
-Your summary should be one paragraph long. More detail
-should go into the following sections.
+This addresses the same disconnected environment challenges as the integrated auth proxy enhancement but for the External OIDC authentication architecture.
+The feature requires the `AuthenticationComponentProxyExternalOIDC` feature gate (which requires `AuthenticationComponentProxy` as a prerequisite) and complements the integrated auth proxy enhancement to provide proxy support across all authentication modes.
 
 ## Motivation
 
-This section is for explicitly listing the motivation, goals and non-goals of
-this proposal. Describe why the change is important and the benefits to users.
+External OIDC authentication delegates token validation from kube-apiserver to oauth-apiserver as a webhook authenticator. On every API request with a bearer token, kube-apiserver calls oauth-apiserver, which validates the token against an external OIDC provider by fetching JWKS keys and calling UserInfo endpoints.
+
+This architecture faces the same disconnected environment challenges as integrated OAuth authentication (see the "Proxy Support for Integrated Auth Stack" [Motivation](./proxy-support-for-integrated-auth-stack.md#motivation) section), but with higher impact: External OIDC validates tokens on every API request (not just during login), making proxy configuration even more critical for cluster operation.
+
+Currently, customers must use cluster-wide proxy configuration, which opens egress for all cluster components and creates operational overhead for ACL management and security auditing. A component-scoped proxy for oauth-apiserver provides the same benefits as the integrated auth proxy enhancement of a clearer security boundaries.
+
+An outline of what this enhancement is going to improve can is shown in this diagram:
+```mermaid
+---
+config:
+  htmlLabels: true
+  theme: dagre
+  flowchart:
+    curve: linear
+---
+flowchart TB
+  User[End User]
+  KAS[kube-apiserver]
+  subgraph Involved component in the enhancement
+    CAO[Cluster Auth Operator]
+    OAAS[oauth-apiserver webhook]
+  end
+  Proxy[Proxy Server]
+  IDP[External OIDC Provider]
+
+  User  -- Bearer token                                                               --> KAS
+
+  KAS   -- POST - TokenReview                                                         --> OAAS
+  OAAS  -- OIDC interactions (JWKS, UserInfo)                                         --> Proxy
+  Proxy -- Forward                                                                    --> IDP
+
+  CAO   -- Validate issuer CA                                                         --> Proxy
+  CAO   -- Deploy with \nHTTP_PROXY, \nHTTPS_PROXY, \nNO_PROXY \nenvironment variables --> OAAS
+```
 
 ### User Stories
 
-Detail the things that people will be able to do if this is implemented and
-what goal that allows them to achieve. In each story, explain who the actor
-is based on their role, explain what they want to do with the system,
-and explain the underlying goal they have, what it is they are going to
-achieve with this new feature.
-
-Use the standard three part formula:
-
-> "As a _role_, I want to _take some action_ so that I can _accomplish a goal_."
-
-Make the change feel real for users, without getting bogged down in
-implementation details.
-
-Here are some example user stories to show what they might look like:
-
-* As an OpenShift engineer, I want to write an enhancement, so that I
-  can get feedback on my design and build consensus about the approach
-  to take before starting the implementation.
-* As an OpenShift engineer, I want to understand the rationale behind
-  a particular feature's design and alternatives considered, so I can
-  work on a new enhancement in that problem space knowing the history
-  of the current design better.
-* As a product manager, I want to review this enhancement proposal, so
-  that I can make sure the customer requirements are met by the
-  design.
-* As an administrator, I want a one-click OpenShift installer, so that
-  I can easily set up a new cluster without having to follow a long
-  set of operations.
-
-In each example, the persona's goal is clear, and the goal is clearly provided
-by the capability being described.
-The engineer wants feedback on their enhancement from their peers, and writing
-an enhancement allows for that feedback.
-The product manager wants to make sure that their customer requirements are fulfilled,
-reviewing the enhancement allows them to check that.
-The administrator wants to set up his OpenShift cluster as easily as possible, and
-reducing the install to a single click simplifies that process.
-
-Here are some real examples from previous enhancements:
-* [As a member of OpenShift concerned with the release process (TRT, dev, staff engineer, maybe even PM),
-I want to opt in to pre-release features so that I can run periodic testing in CI and obtain a signal of
-feature quality.](https://github.com/openshift/enhancements/blob/master/enhancements/installer/feature-sets.md#user-stories)
-* [As a cloud-provider affiliated engineer / platform integrator / RH partner
-I want to have a mechanism to signal OpenShift's built-in operators about additional
-cloud-provider specific components so that I can inject my own platform-specific controllers into OpenShift
-to improve the integration between OpenShift and my cloud provider.](https://github.com/openshift/enhancements/blob/master/enhancements/cloud-integration/infrastructure-external-platform-type.md#user-stories)
-* [As an OpenShift cluster administrator, I want to add worker nodes to my
-existing single control-plane node cluster, so that it'll be able to meet
-growing computation demands.](https://github.com/openshift/enhancements/blob/master/enhancements/single-node/single-node-openshift-with-workers.md#user-stories)
-
-Include a story on how this proposal will be operationalized:
-life-cycled, monitored and remediated at scale.
+* As an OpenShift cluster administrator using External OIDC authentication, I want to configure proxy settings scoped to authentication components, so that oauth-apiserver can validate tokens against external OIDC providers without opening cluster-wide egress for all components.
 
 ### Goals
 
-Summarize the specific goals of the proposal. How will we know that
-this has succeeded?  A good goal describes something a user wants from
-their perspective, and does not include the implementation details
-from the proposal.
+- Enable proxy configuration for oauth-apiserver webhook authenticator to reach external OIDC providers
+- Reuse the existing `Authentication.spec.proxy` API field (no new API surface)
+- Support operator-time OIDC issuer validation through proxy (validateCACert function)
+- Support runtime token validation through proxy (JWKS fetch, UserInfo calls)
+- Follow the same proxy resolution pattern as integrated auth (component-scoped > cluster-wide > none)
 
 ### Non-Goals
 
-What is out of scope for this proposal? Listing non-goals helps to
-focus discussion and make progress. Highlight anything that is being
-deferred to a later phase of implementation that may call for its own
-enhancement.
+- Per-OIDC-provider proxy configuration (proxy applies uniformly to all configured OIDC providers)
+- Modifications to cluster-wide proxy behavior or configuration
+- Modifications to upstream k8s.io/apiserver OIDC code (vendored code already respects HTTP_PROXY environment variables)
+- Hot-reload of proxy CA certificates (proxy CA changes trigger oauth-apiserver redeployment)
 
 ## Proposal
 
-This section should explain what the proposal actually is. Enumerate
-*all* of the proposed changes at a *high level*, including all of the
-components that need to be modified and how they will be
-different. Include the reason for each choice in the design and
-implementation that is proposed here.
+To achieve the given goals, this document propose to extend cluster-authentication-operator to apply `Authentication.spec.proxy` configuration to External OIDC components through two mechanisms:
 
-To keep this section succinct, document the details like API field
-changes, new images, and other implementation details in the
-**Implementation Details** section and record the reasons for not
-choosing alternatives in the **Alternatives** section at the end of
-the document.
+1. **Operator validation** - Update the Cluster Authentication Operator (CAO)  controller to use a proxy-aware HTTP transport when validating OIDC issuer CA certificates during configuration generation;
+2. **Runtime oauth-apiserver** - Inject HTTP_PROXY, HTTPS_PROXY, and NO_PROXY environment variables into the oauth-apiserver deployment so that upstream Kubernetes OIDC code uses the proxy for JWKS fetches and UserInfo calls.
 
 ### Workflow Description
 
-Explain how the user will use the feature. Be detailed and explicit.
-Describe all of the actors, their roles, and the APIs or interfaces
-involved. Define a starting state and then list the steps that the
-user would need to go through to trigger the feature described in the
-enhancement. Optionally add a
-[mermaid](https://github.com/mermaid-js/mermaid#readme) sequence
-diagram.
+**Cluster Administrator** is a human user responsible for configuring cluster authentication.
 
-Use sub-sections to explain variations, such as for error handling,
-failure recovery, or alternative outcomes.
+#### Configuration Workflow
 
-For example:
+1. Cluster administrator sets `spec.proxy` on `operator.openshift.io/v1 Authentication/cluster` resource (see the "Proxy Support for Integrated Auth Stack" [API Extensions](./proxy-support-for-integrated-auth-stack.md#api-extensions));
+2. Cluster authentication operator picks up the change and triggers:
+   - Re-validation of OIDC issuer via proxy;
+   - Re-deployment of oauth-apiserver with proxy environment variables injected;
+   - Proxy trustedCA ConfigMap sync from openshift-config to openshift-oauth-apiserver namespace;
+5. oauth-apiserver pods restart with new proxy configuration
 
-**cluster creator** is a human user responsible for deploying a
-cluster.
+#### Runtime Authentication Workflow
 
-**application administrator** is a human user responsible for
-deploying an application in a cluster.
+1. End user authenticates with external OIDC provider (client-side, outside cluster scope)
+2. End user receives OIDC token from provider
+3. End user makes API request with `Authorization: Bearer <token>` header
+4. kube-apiserver receives request and calls oauth-apiserver webhook authenticator
+5. oauth-apiserver validates token through configured proxy:
+   - Fetches JWKS keys from OIDC provider's .well-known/openid-configuration endpoint
+   - Validates token signature against JWKS
+   - Calls UserInfo endpoint for additional claims
+   - Executes CEL claim mapping expressions
+6. oauth-apiserver returns authentication response to kube-apiserver
+7. kube-apiserver authorizes request and returns response to user
 
-1. The cluster creator sits down at their keyboard...
-2. ...
-3. The cluster creator sees that their cluster is ready to receive
-   applications, and gives the application administrator their
-   credentials.
+All OIDC provider HTTP calls automatically use proxy configured via HTTP_PROXY/HTTPS_PROXY/NO_PROXY environment variables.
 
-See
-https://github.com/openshift/enhancements/blob/master/enhancements/workload-partitioning/management-workload-partitioning.md#high-level-end-to-end-workflow
-and https://github.com/openshift/enhancements/blob/master/enhancements/agent-installer/automated-workflow-for-agent-based-installer.md for more detailed examples.
+#### Proxy Configuration Update Workflow
+
+1. Cluster administrator updates `spec.proxy` on Authentication CR (e.g., changes httpProxy URL)
+2. Operator detects change via informer
+3. Operator re-validates OIDC issuer via new proxy configuration
+4. Operator updates oauth-apiserver deployment with new environment variables
+5. Deployment controller triggers rolling update
+6. New oauth-apiserver pods start with updated proxy configuration
+7. Old pods terminate after new pods are ready
 
 ### API Extensions
 
-API Extensions are CRDs, admission and conversion webhooks, aggregated API servers,
-and finalizers, i.e. those mechanisms that change the OCP API surface and behaviour.
+**No new API extensions** - This enhancement reuses the existing `Authentication.spec.proxy` field defined in the integrated auth proxy enhancement (ref [API Extensions](./proxy-support-for-integrated-auth-stack.md#api-extensions)).
 
-- Name the API extensions this enhancement adds or modifies.
-- Does this enhancement modify the behaviour of existing resources, especially those owned
-  by other parties than the authoring team (including upstream resources), and, if yes, how?
-  Please add those other parties as reviewers to the enhancement.
+Reference the integrated auth proxy enhancement for full API definition:
+- `spec.proxy.httpProxy` - string, 1-2048 characters, http/https URL for HTTP connections
+- `spec.proxy.httpsProxy` - string, 1-2048 characters, http/https URL for HTTPS connections
+- `spec.proxy.noProxy` - string array, maximum 64 items, each 1-253 characters, comma-separated list of domains/IPs to exclude from proxy
+- `spec.proxy.trustedCA.name` - ConfigMap reference in openshift-config namespace containing PEM-encoded proxy CA certificate bundle
 
-  Examples:
-  - Adds a finalizer to namespaces. Namespace cannot be deleted without our controller running.
-  - Restricts the label format for objects to X.
-  - Defaults field Y on object kind Z.
-
-For small API changes, you may want to model the API here as a Go type.
-For large API changes, give an idea of what the API will look like in serialized form as YAML,
-and open a PR for the actual API changes to the relevant repository. Your API approver
-should review the API both at the high level in this document, and lower level in the PR for
-the actual API changes.
-Including larger API changes in this document often creates duplication of effort where feedback
-is given twice, once here and once in the PR for the actual API changes.
-
-Fill in the operational impact of these API Extensions in the "Operational Aspects
-of API Extensions" section.
+CEL validation enforces at least one of httpProxy or httpsProxy must be set when spec.proxy is configured.
 
 ### Topology Considerations
 
 #### Hypershift / Hosted Control Planes
 
-Are there any unique considerations for making this change work with
-Hypershift?
-
-See https://github.com/openshift/enhancements/blob/e044f84e9b2bafa600e6c24e35d226463c2308a5/enhancements/multi-arch/heterogeneous-architecture-clusters.md?plain=1#L282
-
-How does it affect any of the components running in the
-management cluster? How does it affect any components running split
-between the management cluster and guest cluster?
+TBD
 
 #### Standalone Clusters
 
-Is the change relevant for standalone clusters?
+Yes, this is applicable to standalone clusters.
 
 #### Single-node Deployments or MicroShift
 
-How does this proposal affect the resource consumption of a
+> How does this proposal affect the resource consumption of a
 single-node OpenShift deployment (SNO), CPU and memory?
 
-How does this proposal affect MicroShift? For example, if the proposal
+This does not add any additional overhead besides network latency for the one extra proxy hop.
+
+> How does this proposal affect MicroShift? For example, if the proposal
 adds configuration options through API resources, should any of those
 behaviors also be exposed to MicroShift admins through the
 configuration file for MicroShift?
 
+The auth stack is not present on MicroShift.
+
 #### OpenShift Kubernetes Engine
 
-How does this proposal affect OpenShift Kubernetes Engine (OKE)?  Does it depend
-on features that are excluded from the OKE product offering?  See [the
-comparison of OKE and OCP in the product documentation](https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/overview/oke-about#about_oke_similarities_and_differences).
+Not affected.
 
 ### Implementation Details/Notes/Constraints
 
-What are some important details that didn't come across above in the
-**Proposal**? Go in to as much detail as necessary here. This might be
-a good place to talk about core concepts and how they relate. While it is useful
-to go into the details of the code changes required, it is not necessary to show
-how the code will be rewritten in the enhancement.
+#### Proxy Resolution
+
+Component-scoped proxy completely replaces the cluser-wide proxy following the same policy as described in the "Proxy Support for Integrated Auth Stack" [Proxy Resoultion](./proxy-support-for-integrated-auth-stack.md#proxy-resolution) section
+
+#### Cluster Auth Operator
+
+When CAO is creating/updating the `auth-config` ConfigMap triggerd by changes on the `Authentication` configuration or on the provider's CA bundle in the `openshift-config` namespace, the verification of the OIDC issuer CA certificate must be proxy aware.
+This is achieved by adding a `ProxyResolver` (e.g. `github.com/openshift/cluster-authentication-operator/pkg/controllers/common.AuthProxyResolver`) field to the `github.com/openshift/cluster-authentication-operator/pkg/controllers/externaloidc/generation/oauthapiserver.AuthenticationConfigurationGenerator` struct and use the values resolved to adapt the CA validation method.
+
+#### oauth-apiserver workload
+
+oauth-apiserver way how get deployed by CAO must change in the scenario where the usage of and external oidc issuer is enabled by injecting the HTTP_PROXY, HTTPS_PROXY and NO_PROXY environment variables into container spec and mount a volume with the proxy CA certificate.
 
 ### Risks and Mitigations
 
-What are the risks of this proposal and how do we mitigate. Think broadly. For
-example, consider both security and how this will impact the larger OKD
-ecosystem.
+**Cluster lockout from invalid proxy configuration.**
+A misconfigured component proxy (wrong URL, missing CA) can prevent
+the OAuth Server from reaching the external IdP, locking all users out of the cluster.
+The proxy validation controller tests IdP connectivity on configuration change and reports
+warnings for unreachable IdPs and `Degraded` for proxy-level failures (connection refused,
+TLS handshake errors), but these conditions are informational — the configuration is applied
+regardless. Recovery is possible via `kubeadmin` credentials or client certificate
+authentication, which bypass OAuth entirely. The risk is the same class as any IdP
+misconfiguration today.
 
-How will security be reviewed and by whom?
+**Proxy as an untrusted intermediary.**
+A proxy positioned between auth components and the IdP can observe or tamper with
+authorization codes, tokens, and user info. This is the same trust model as the
+cluster-wide proxy — the administrator who configures the proxy is assumed to control it.
+The `trustedCA` field pins the proxy's TLS certificate, and all IdP traffic uses HTTPS,
+so the proxy cannot silently intercept without a trusted CA. The security model and
+implications should be documented.
 
-How will UX be reviewed and by whom?
+**Network dependency in the authentication path.**
+Adding a proxy hop introduces a new availability dependency: if the proxy is down,
+all authentication fails. This is the same failure class as a cluster-wide proxy outage
+and is mitigated by setting a `Degraded` condition when the proxy is unreachable, giving
+administrators visibility. Proxy high availability is the administrator's responsibility
+and should be documented as a prerequisite.
 
-Consider including folks that also work outside your immediate sub-project.
+**Proxy credential leakage.**
+Proxy credentials embedded in the URL (e.g., `http://user:pass@proxy:3128`) are stored
+in the operator spec and propagated as environment variables to OAuth Server pods. This
+mirrors the cluster-wide proxy's approach. Support for a `proxyCredentials`
+SecretNameReference for improved credential handling could be added as a follow-up.
+
+**Debugging complexity from dual proxy sources.**
+When both a cluster-wide proxy and a component-scoped proxy exist, diagnosing connectivity
+issues requires understanding the precedence rules. The proxy validation controller reports conditions when the proxy itself is misconfigured
+and emits events when IdP endpoints are unreachable through the proxy. The resolved proxy
+values are visible as environment variables on the OAuth Server pod spec.
+The precedence rules (component-scoped > cluster-wide > none) should be documented
+clearly.
 
 ### Drawbacks
 
-The idea is to find the best form of an argument why this enhancement should
-_not_ be implemented.
-
-What trade-offs (technical/efficiency cost, user experience, flexibility,
-supportability, etc) must be made in order to implement this? What are the reasons
-we might not want to undertake this proposal, and how do we overcome them?
-
-Does this proposal implement a behavior that's new/unique/novel? Is it poorly
-aligned with existing user expectations?  Will it be a significant maintenance
-burden?  Is it likely to be superceded by something else in the near future?
+TBD
 
 ## Alternatives (Not Implemented)
 
-Similar to the `Drawbacks` section the `Alternatives` section is used
-to highlight and record other possible approaches to delivering the
-value proposed by an enhancement, including especially information
-about why the alternative was not selected.
+### Alternatives inherited from integrated auth proxy enhancement
 
-## Open Questions [optional]
+1. **Per-OIDC-provider proxy configuration**
+   - Alternative: Add proxy fields per OIDC provider in issuer configuration
+   - Rejected: Adds API complexity. Component-scoped proxy is sufficient for disconnected environment use cases where all external traffic routes through the same proxy infrastructure.
 
-This is where to call out areas of the design that require closure before deciding
-to implement the design.  For instance,
- > 1. This requires exposing previously private resources which contain sensitive
-  information.  Can we do this?
+2. **Annotation-based proxy configuration**
+   - Alternative: Configure proxy via annotations on Authentication resource
+   - Rejected: Loses strongly-typed API validation. Increases risk of configuration errors. Annotations are for non-critical metadata, not core configuration.
+
+3. **Discovery URL override with reverse proxy**
+   - Alternative: Allow overriding OIDC discovery URLs to point to in-cluster reverse proxy
+   - Rejected: Only solves OIDC-specific problem. Doesn't address general egress requirements for other external dependencies. Adds configuration complexity by requiring administrators to deploy and maintain reverse proxy infrastructure.
+
+### Alternative unique to this enhancement
+
+4. **Proxy support for integrated auth only, exclude External OIDC**
+   - Alternative: Document that External OIDC requires cluster-wide proxy, only implement component-scoped proxy for integrated auth
+   - Rejected: External OIDC is the target authentication architecture. Not supporting component-scoped proxy forces customers to use cluster-wide proxy (defeating the security benefits) or remain on legacy integrated OAuth mode. This would block External OIDC adoption in disconnected environments where component-scoped proxy is a security requirement.
 
 ## Test Plan
 
